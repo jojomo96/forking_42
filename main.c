@@ -155,6 +155,7 @@ int main(int argc, char **argv) {
                 write(1, &pixel[j], 1);
                 message_length -= 1;
                 if (message_length == 0) {
+                    write(1, "\n", 1);
                     return 0;
                 }
             }
