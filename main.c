@@ -142,6 +142,8 @@ int main(const int argc, char **argv) {
 		u32 current_width = message_starting_pixel_width;
 		u32 current_height = message_starting_pixel_height;
 
+		char message[511];
+		int message_index = 0;
 		const u32 total_pixels = (message_length + 2) / 3;
 		for (u32 i = 0; i < total_pixels; ++i) {
 			const u8 *pixel = get_pixel(pixel_data, header, current_width, current_height);
@@ -151,9 +153,10 @@ int main(const int argc, char **argv) {
 			}
 
 			for (int j = 0; j < 3; ++j) {
-				write(1, &pixel[j], 1);
+				message[message_index++] = pixel[j];
 				message_length -= 1;
 				if (message_length == 0) {
+					write(1, message, message_index);
 					write(1, "\n", 1);
 					return 0;
 				}
