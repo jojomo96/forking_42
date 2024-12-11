@@ -104,7 +104,6 @@ void find_header(const struct bmp_header *header, u8 target_color[3], u8 *pixel_
                     *found_width = x;
                     *found_height = y;
                     is_target_color_found = 1;
-                    // printf("Found target pattern at (%u, %u)\n", x, y);
                     break;
                 }
             }
@@ -143,14 +142,11 @@ int main(int argc, char **argv) {
     u32 found_height = 0;
 
     find_header(header, target_color, pixel_data, is_target_color_found, &found_width, &found_height);
-    // Ensure the pixel 7 positions to the right is within bounds
-
 
     if (found_width + 7 < header->width) {
-        u8 *message_pixel = pixel_data + ((found_height + 7) * header->width + (found_width + 7)) * (header->bit_per_pixel / 8);
+        u8 *message_pixel = get_pixel(pixel_data, header, found_width + 7, found_height + 7);
 
         u32 message_length = message_pixel[0] + message_pixel[2];
-        // printf("Message length sum: %u\n", message_length);
 
         const u32 message_starting_pixel_width = found_width + 2;
         const u32 message_starting_pixel_height = found_height + 5;
@@ -158,18 +154,14 @@ int main(int argc, char **argv) {
         u32 current_width = message_starting_pixel_width;
         u32 current_height = message_starting_pixel_height;
 
-        // Assuming message_length is the total number of pixels (not triplets).
-        // If message_length refers to triplets of pixels, adjust accordingly.
         const u32 total_pixels = (message_length + 2) / 3;
         for (u32 i = 0; i < total_pixels; ++i) {
-            // Compute the pixel location in memory:
-            const u8 *pixel = pixel_data + (current_height * header->width + current_width) * (header->bit_per_pixel / 8);
+            const u8 *pixel = get_pixel(pixel_data, header, current_width, current_height);
 
             for (int j = 0; j < 3; ++j) {
                 write(1, &pixel[j], 1);
                 message_length -= 1;
                 if (message_length == 0) {
-                    // write(1, "\n", 1);
                     exit(0);
                 }
             }
