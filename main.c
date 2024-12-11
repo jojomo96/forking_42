@@ -63,13 +63,9 @@ static u8* get_pixel(u8 *pixel_data, const struct bmp_header *header, const u32 
 }
 
 static int check_pattern(u8 *pixel_data, const struct bmp_header *header, u8 target_color[3], const u32 x, const u32 y) {
-    // Define the pattern offsets relative to (x, y)
-    // For illustration, checking a vertical line above and a horizontal line at y-1
     int pattern_offsets[][2] = {
-        // Vertical line above O
         {0, 1}, {0, 2}, {0, 3}, {0, 4}, {0, 5}, {0, 6}, {0, 7},
-        // Horizontal line above O
-        {0, 7}, {1, 7}, {2, 7}, {3, 7}, {4, 7}, {5, 7} , {6, 7}
+        {0, 7}, {1, 7}, {2, 7}, {3, 7}, {4, 7}, {5, 7}, {6, 7}
     };
     int pattern_size = sizeof(pattern_offsets) / sizeof(pattern_offsets[0]);
 
@@ -79,37 +75,28 @@ static int check_pattern(u8 *pixel_data, const struct bmp_header *header, u8 tar
 
         u8 *p = get_pixel(pixel_data, header, px, py);
         if (!p) {
-            // Out of bounds, pattern fails
-            return 0;
+            return 0; // Out of bounds
         }
         if (memcmp(p, target_color, 3) != 0) {
-            // Mismatch in color
-            return 0;
+            return 0; // Mismatch
         }
     }
 
-    // If we reach here, all pattern pixels matched the target color
     return 1;
 }
 
 void find_header(const struct bmp_header *header, u8 target_color[3], u8 *pixel_data, int is_target_color_found, u32 *found_width, u32 *found_height) {
-    // Iterate through the pixel data
     for (u32 y = 0; y < header->height; ++y) {
         for (u32 x = 0; x < header->width; ++x) {
             u8 *pixel = get_pixel(pixel_data, header, x, y);
             if (pixel && memcmp(pixel, target_color, 3) == 0) {
-                // Potential match found at (x,y)
-                // Now check the surrounding pattern
                 if (check_pattern(pixel_data, header, target_color, x, y)) {
                     *found_width = x;
                     *found_height = y;
                     is_target_color_found = 1;
-                    break;
+                    return;
                 }
             }
-        }
-        if (is_target_color_found) {
-            break;
         }
     }
 
@@ -131,10 +118,8 @@ int main(int argc, char **argv) {
     }
     struct bmp_header *header = (struct bmp_header *) file_content.data;
 
-    // Define the target color (e.g., red)
-    u8 target_color[3] = {127, 188, 217}; // RGB format
+    u8 target_color[3] = {127, 188, 217};
 
-    // Calculate the starting position of the pixel data
     u8 *pixel_data = (u8 *) file_content.data + header->data_offset;
 
     int is_target_color_found = 0;
@@ -145,6 +130,10 @@ int main(int argc, char **argv) {
 
     if (found_width + 7 < header->width) {
         u8 *message_pixel = get_pixel(pixel_data, header, found_width + 7, found_height + 7);
+        if (!message_pixel) {
+            PRINT_ERROR("Message pixel is out of bounds\n");
+            return 1;
+        }
 
         u32 message_length = message_pixel[0] + message_pixel[2];
 
@@ -157,24 +146,26 @@ int main(int argc, char **argv) {
         const u32 total_pixels = (message_length + 2) / 3;
         for (u32 i = 0; i < total_pixels; ++i) {
             const u8 *pixel = get_pixel(pixel_data, header, current_width, current_height);
+            if (!pixel) {
+                PRINT_ERROR("Pixel is out of bounds\n");
+                return 1;
+            }
 
             for (int j = 0; j < 3; ++j) {
                 write(1, &pixel[j], 1);
                 message_length -= 1;
                 if (message_length == 0) {
-                    exit(0);
+                    return 0;
                 }
             }
-            // Move one pixel to the right
             current_width += 1;
-            // Every 8 pixels, reset width and move up one row
             if ((i + 1) % 6 == 0) {
-                current_width = message_starting_pixel_width; // Reset to start width
-                current_height -= 1;                          // Move up one row
+                current_width = message_starting_pixel_width;
+                current_height -= 1;
             }
         }
     } else {
-        printf("Pixel 7 positions to the right is out of bounds\n");
+        PRINT_ERROR("Pixel 7 positions to the right is out of bounds\n");
         return 0;
     }
     return 0;
