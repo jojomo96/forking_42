@@ -55,6 +55,71 @@ struct file_content read_entire_file(char *filename) {
     return (struct file_content){file_data, file_size};
 }
 
+static u8* get_pixel(u8 *pixel_data, struct bmp_header *header, u32 x, u32 y) {
+    if (x >= header->width || y >= header->height) {
+        return NULL;
+    }
+    return pixel_data + (y * header->width + x) * (header->bit_per_pixel / 8);
+}
+
+static int check_pattern(u8 *pixel_data, struct bmp_header *header, u8 target_color[3], u32 x, u32 y) {
+    // Define the pattern offsets relative to (x, y)
+    // For illustration, checking a vertical line above and a horizontal line at y-1
+    int pattern_offsets[][2] = {
+        // Vertical line above O
+        {0, 1}, {0, 2}, {0, 3}, {0, 4}, {0, 5}, {0, 6}, {0, 7},
+        // Horizontal line above O
+        {0, 7}, {1, 7}, {2, 7}, {3, 7}, {4, 7}, {5, 7} , {6, 7}
+    };
+    int pattern_size = sizeof(pattern_offsets) / sizeof(pattern_offsets[0]);
+
+    for (int i = 0; i < pattern_size; i++) {
+        u32 px = x + pattern_offsets[i][0];
+        u32 py = y + pattern_offsets[i][1];
+
+        u8 *p = get_pixel(pixel_data, header, px, py);
+        if (!p) {
+            // Out of bounds, pattern fails
+            return 0;
+        }
+        if (memcmp(p, target_color, 3) != 0) {
+            // Mismatch in color
+            return 0;
+        }
+    }
+
+    // If we reach here, all pattern pixels matched the target color
+    return 1;
+}
+
+void find_header(struct bmp_header *header, u8 target_color[3], u8 *pixel_data, int is_target_color_found, u32 *found_width, u32 *found_height) {
+    // Iterate through the pixel data
+    for (u32 y = 0; y < header->height; ++y) {
+        for (u32 x = 0; x < header->width; ++x) {
+            u8 *pixel = get_pixel(pixel_data, header, x, y);
+            if (pixel && memcmp(pixel, target_color, 3) == 0) {
+                // Potential match found at (x,y)
+                // Now check the surrounding pattern
+                if (check_pattern(pixel_data, header, target_color, x, y)) {
+                    *found_width = x;
+                    *found_height = y;
+                    is_target_color_found = 1;
+                    printf("Found target pattern at (%u, %u)\n", x, y);
+                    break;
+                }
+            }
+        }
+        if (is_target_color_found) {
+            break;
+        }
+    }
+
+    if (!is_target_color_found) {
+        printf("Target color not found\n");
+        exit(1);
+    }
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) {
         PRINT_ERROR("Usage: decode <input_filename>\n");
@@ -72,87 +137,49 @@ int main(int argc, char **argv) {
         header->height, header->number_of_planes, header->bit_per_pixel, header->compression_type,
         header->compressed_image_size);
 
-    // Create a copy of the BMP file data
-    i8 *file_copy = malloc(file_content.size);
-    memcpy(file_copy, file_content.data, file_content.size);
-
     // Define the target color (e.g., red)
     u8 target_color[3] = {127, 188, 217}; // RGB format
 
     // Calculate the starting position of the pixel data
     u8 *pixel_data = (u8 *) file_content.data + header->data_offset;
-    u8 *pixel_data_copy = (u8 *) file_copy + header->data_offset;
 
     int is_target_color_found = 0;
     u32 found_width = 0;
     u32 found_height = 0;
-    // Iterate through the pixel data
-    for (u32 y = 0; y < header->height; ++y) {
-        for (u32 x = 0; x < header->width; ++x) {
-            u8 *pixel = pixel_data + (y * header->width + x) * (header->bit_per_pixel / 8);
-            if (memcmp(pixel, target_color, 3) == 0) {
-                found_width = x;
-                found_height = y;
-                is_target_color_found = 1;
-                printf("Found target color at (%u, %u)\n", x, y);
-                break;
-            }
-        }
-        if (is_target_color_found) {
-            break;
-        }
-    }
 
-    if (!is_target_color_found) {
-        printf("Target color not found\n");
-        free(file_copy);
-        return 0;
-    }
-    u32 message_length;
+    find_header(header, target_color, pixel_data, is_target_color_found, &found_width, &found_height);
     // Ensure the pixel 7 positions to the right is within bounds
+
+
     if (found_width + 7 < header->width) {
         u8 *message_pixel = pixel_data + ((found_height + 7) * header->width + (found_width + 7)) * (header->bit_per_pixel / 8);
-        u8 message_length_color[3];
-        memcpy(message_length_color, message_pixel, 3);
-        printf("Message length color: R=%u, G=%u, B=%u\n", message_length_color[0], message_length_color[1], message_length_color[2]);
 
-        message_length = message_length_color[0] + message_length_color[2];
+        u32 message_length = message_pixel[0] + message_pixel[2];
         printf("Message length sum: %u\n", message_length);
 
-        // Color the message length pixel in the copy
-        u8 *message_pixel_copy = pixel_data_copy + ((found_height + 7) * header->width + (found_width + 7)) * (header->bit_per_pixel / 8);
-        message_pixel_copy[0] = 255; // Blue
-        message_pixel_copy[1] = 0;   // Green
-        message_pixel_copy[2] = 0;   // Red
-
-        message_pixel_copy = pixel_data_copy + ((found_height + 7) * header->width + (found_width)) * (header->bit_per_pixel / 8);
-        message_pixel_copy[0] = 0; // Blue
-        message_pixel_copy[1] = 255;  // Green
-        message_pixel_copy[2] = 0;   //Red
-
-
-        u32 message_starting_pixel_width = found_width + 2;
-        u32 message_starting_pixel_height = found_height + 5;
+        const u32 message_starting_pixel_width = found_width + 2;
+        const u32 message_starting_pixel_height = found_height + 5;
 
         u32 current_width = message_starting_pixel_width;
         u32 current_height = message_starting_pixel_height;
 
         // Assuming message_length is the total number of pixels (not triplets).
         // If message_length refers to triplets of pixels, adjust accordingly.
-        u32 total_pixels = (message_length + 2) / 3;
-
+        const u32 total_pixels = (message_length + 2) / 3;
         for (u32 i = 0; i < total_pixels; ++i) {
             // Compute the pixel location in memory:
-            u8 *message_pixel = pixel_data_copy + (current_height * header->width + current_width) * (header->bit_per_pixel / 8);
+            const u8 *pixel = pixel_data + (current_height * header->width + current_width) * (header->bit_per_pixel / 8);
 
-            // Set pixel color (BGR format assumed):
-            message_pixel[0] = 0;    // Blue
-            message_pixel[1] = 0;    // Green
-            message_pixel[2] = 255;  // Red
-
+            for (int j = 0; j < 3; ++j) {
+                write(1, &pixel[j], 1);
+                message_length -= 1;
+                if (message_length == 0) {
+                    write(1, "\n", 1);
+                    exit(0);
+                }
+            }
             // Move one pixel to the right
             current_width += 1;
-
             // Every 8 pixels, reset width and move up one row
             if ((i + 1) % 6 == 0) {
                 current_width = message_starting_pixel_width; // Reset to start width
@@ -161,21 +188,7 @@ int main(int argc, char **argv) {
         }
     } else {
         printf("Pixel 7 positions to the right is out of bounds\n");
-        free(file_copy);
         return 0;
     }
-
-
-
-    // Write the modified data to a new file
-    int output_file_fd = open("test.bmp", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (output_file_fd >= 0) {
-        write(output_file_fd, file_copy, file_content.size);
-        close(output_file_fd);
-    } else {
-        PRINT_ERROR("Failed to write output file\n");
-    }
-
-    free(file_copy);
     return 0;
 }
