@@ -104,7 +104,7 @@ void find_header(struct bmp_header *header, u8 target_color[3], u8 *pixel_data, 
                     *found_width = x;
                     *found_height = y;
                     is_target_color_found = 1;
-                    printf("Found target pattern at (%u, %u)\n", x, y);
+                    // printf("Found target pattern at (%u, %u)\n", x, y);
                     break;
                 }
             }
@@ -131,11 +131,11 @@ int main(int argc, char **argv) {
         return 1;
     }
     struct bmp_header *header = (struct bmp_header *) file_content.data;
-    printf(
-        "signature: %.2s\nfile_size: %u\ndata_offset: %u\ninfo_header_size: %u\nwidth: %u\nheight: %u\nplanes: %i\nbit_per_px: %i\ncompression_type: %u\ncompression_size: %u\n",
-        header->signature, header->file_size, header->data_offset, header->info_header_size, header->width,
-        header->height, header->number_of_planes, header->bit_per_pixel, header->compression_type,
-        header->compressed_image_size);
+    // printf(
+    //     "signature: %.2s\nfile_size: %u\ndata_offset: %u\ninfo_header_size: %u\nwidth: %u\nheight: %u\nplanes: %i\nbit_per_px: %i\ncompression_type: %u\ncompression_size: %u\n",
+    //     header->signature, header->file_size, header->data_offset, header->info_header_size, header->width,
+    //     header->height, header->number_of_planes, header->bit_per_pixel, header->compression_type,
+    //     header->compressed_image_size);
 
     // Define the target color (e.g., red)
     u8 target_color[3] = {127, 188, 217}; // RGB format
@@ -155,7 +155,7 @@ int main(int argc, char **argv) {
         u8 *message_pixel = pixel_data + ((found_height + 7) * header->width + (found_width + 7)) * (header->bit_per_pixel / 8);
 
         u32 message_length = message_pixel[0] + message_pixel[2];
-        printf("Message length sum: %u\n", message_length);
+        // printf("Message length sum: %u\n", message_length);
 
         const u32 message_starting_pixel_width = found_width + 2;
         const u32 message_starting_pixel_height = found_height + 5;
@@ -174,7 +174,7 @@ int main(int argc, char **argv) {
                 write(1, &pixel[j], 1);
                 message_length -= 1;
                 if (message_length == 0) {
-                    write(1, "\n", 1);
+                    // write(1, "\n", 1);
                     exit(0);
                 }
             }
