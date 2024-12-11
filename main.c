@@ -4,10 +4,8 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <stdint.h>
 #include <pthread.h>
-#include <immintrin.h>
 
 typedef char i8;
 typedef unsigned char u8;
@@ -66,19 +64,7 @@ static inline u8* pixel_ptr(u8 *pixel_data, u32 bytes_per_pixel, u32 width, u32 
     return pixel_data + ((u64)y * (u64)width + (u64)x) * bytes_per_pixel;
 }
 
-// Use SSE/AVX for color matching. We only have 3 bytes to compare, but we'll use a 32-bit load.
-// We'll load 4 bytes from p and from target_color (with padded zero) and compare.
-// To avoid misalignment issues, we just load into a 32-bit integer directly and compare.
-static inline int color_match(const u8 *p, const u8 target_color[3]) {
-    // We can pack target_color into a 32-bit integer
-    uint32_t p_val = *(const uint32_t *)p & 0x00FFFFFF;
-    uint32_t t_val = (uint32_t)target_color[0]
-                   | ((uint32_t)target_color[1] << 8)
-                   | ((uint32_t)target_color[2] << 16);
-    return __builtin_expect(p_val == t_val, 0);
-}
-
-// Precompute max pattern offsets to avoid recomputing them every time:
+// Precompute max pattern offsets
 static inline void pattern_max_offsets(u32 *max_dx, u32 *max_dy) {
     u32 local_max_dx = 0;
     u32 local_max_dy = 0;
@@ -93,22 +79,21 @@ static inline void pattern_max_offsets(u32 *max_dx, u32 *max_dy) {
 }
 
 // Check the pattern at a given (x, y)
-static inline int check_pattern(u8 *pixel_data, const struct bmp_header *header, const u8 target_color[3],
-                               const u32 x, const u32 y, u32 bytes_per_pixel,
-                               u32 max_dx, u32 max_dy) {
-    const u32 width = header->width;
-    const u32 height = header->height;
-
+static inline int check_pattern(const u8 *pixel_data, u32 width, u32 height,
+                                u32 bytes_per_pixel, uint32_t target_val,
+                                u32 x, u32 y, u32 max_dx, u32 max_dy) {
     if (__builtin_expect(x + max_dx >= width || y + max_dy >= height, 0)) {
         return 0;
     }
 
+    // Verify all pattern offsets
     for (int i = 0; i < pattern_size; i++) {
         u32 px = x + (u32)pattern_offsets[i][0];
         u32 py = y + (u32)pattern_offsets[i][1];
         const u8 *p = pixel_data + ((u64)py * width + px) * bytes_per_pixel;
-        if (!color_match(p, target_color)) {
-            return 0; // Mismatch
+        uint32_t p_val = (*(const uint32_t *)p) & 0x00FFFFFF;
+        if (__builtin_expect(p_val != target_val, 0)) {
+            return 0;
         }
     }
 
@@ -118,7 +103,6 @@ static inline int check_pattern(u8 *pixel_data, const struct bmp_header *header,
 // Shared data for threads
 struct thread_data {
     const struct bmp_header *header;
-    const u8 *target_color;
     u8 *pixel_data;
     u32 bytes_per_pixel;
     u32 start_line;
@@ -126,9 +110,9 @@ struct thread_data {
     volatile int *found;
     u32 *found_x;
     u32 *found_y;
-    pthread_mutex_t *found_lock;
     u32 max_dx;
     u32 max_dy;
+    uint32_t target_val; // precomputed target color val
 };
 
 static void* find_pattern_thread(void *arg) {
@@ -136,39 +120,55 @@ static void* find_pattern_thread(void *arg) {
     const struct bmp_header *header = td->header;
     const u32 width = header->width;
     const u32 bytes_per_pixel = td->bytes_per_pixel;
-    u8 *pixel_data = td->pixel_data;
-    const u8 *target_color = td->target_color;
+    const u8 *pixel_data = td->pixel_data;
+    const uint32_t target_val = td->target_val;
 
+    // We do local variables to reduce pointer dereferences
+    const u32 start_line = td->start_line;
+    const u32 end_line   = td->end_line;
     int local_found = 0;
     u32 local_x = 0, local_y = 0;
+    const u32 max_dx = td->max_dx;
+    const u32 max_dy = td->max_dy;
 
-    for (u32 y = td->start_line; y < td->end_line && !local_found; ++y) {
-        // Check global found flag occasionally
-        if (__atomic_load_n(td->found, __ATOMIC_ACQUIRE))
-            break;
-        u8 *row_ptr = pixel_data + (u64)y * width * bytes_per_pixel;
-        for (u32 x = 0; x < width && !local_found; ++x) {
-            const u8 *pixel = row_ptr + x * bytes_per_pixel;
-            if (color_match(pixel, target_color)) {
-                // Check the pattern
-                if (check_pattern(pixel_data, header, target_color, x, y, bytes_per_pixel, td->max_dx, td->max_dy)) {
+    // Iterate over rows assigned to this thread
+    for (u32 y = start_line; y < end_line; y++) {
+        // Check global found
+        if (__builtin_expect(*td->found, 0)) break;
+
+        const u8 *row_ptr = pixel_data + (u64)y * width * bytes_per_pixel;
+
+        // Optional: _mm_prefetch((const char*) (row_ptr + 64), _MM_HINT_T0);
+
+        for (u32 x = 0; x < width; x++) {
+            // Check global found
+            if (__builtin_expect(*td->found, 0)) goto done;
+
+            // Fast inline color match
+            uint32_t p_val = (*(const uint32_t *)(row_ptr + x * bytes_per_pixel)) & 0x00FFFFFF;
+            if (__builtin_expect(p_val == target_val, 0)) {
+                // Check pattern
+                if (check_pattern(pixel_data, width, header->height, bytes_per_pixel,
+                                  target_val, x, y, max_dx, max_dy)) {
                     local_found = 1;
                     local_x = x;
                     local_y = y;
-                    break;
+                    goto done;
                 }
             }
         }
     }
 
+done:
     if (local_found) {
-        pthread_mutex_lock(td->found_lock);
-        if (!(*td->found)) {
-            *td->found = 1;
+        // Atomic test and set to avoid mutex overhead
+        // The first thread to set found wins.
+        // This uses a CAS loop. If found is already 1, we do nothing.
+        int expected = 0;
+        if (__atomic_compare_exchange_n(td->found, &expected, 1, 0, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
             *td->found_x = local_x;
             *td->found_y = local_y;
         }
-        pthread_mutex_unlock(td->found_lock);
     }
 
     return NULL;
@@ -179,17 +179,20 @@ static void find_header(const struct bmp_header *header, const u8 target_color[3
     const u32 height = header->height;
     const u32 bytes_per_pixel = header->bit_per_pixel / 8;
 
-    int num_threads = 4; // Adjust according to your system
+    int num_threads = 16; // Adjust as needed
     pthread_t threads[num_threads];
     struct thread_data tdata[num_threads];
 
     volatile int found = 0;
     u32 found_x = 0, found_y = 0;
 
-    pthread_mutex_t found_lock = PTHREAD_MUTEX_INITIALIZER;
-
     u32 max_dx, max_dy;
     pattern_max_offsets(&max_dx, &max_dy);
+
+    // Precompute target_val
+    uint32_t target_val = (uint32_t)target_color[0]
+                        | ((uint32_t)target_color[1] << 8)
+                        | ((uint32_t)target_color[2] << 16);
 
     u32 chunk_size = height / (u32)num_threads;
     for (int i = 0; i < num_threads; i++) {
@@ -197,7 +200,6 @@ static void find_header(const struct bmp_header *header, const u8 target_color[3
         u32 end_line = (i == num_threads - 1) ? height : start_line + chunk_size;
 
         tdata[i].header = header;
-        tdata[i].target_color = target_color;
         tdata[i].pixel_data = pixel_data;
         tdata[i].bytes_per_pixel = bytes_per_pixel;
         tdata[i].start_line = start_line;
@@ -205,9 +207,9 @@ static void find_header(const struct bmp_header *header, const u8 target_color[3
         tdata[i].found = &found;
         tdata[i].found_x = &found_x;
         tdata[i].found_y = &found_y;
-        tdata[i].found_lock = &found_lock;
         tdata[i].max_dx = max_dx;
         tdata[i].max_dy = max_dy;
+        tdata[i].target_val = target_val;
 
         pthread_create(&threads[i], NULL, find_pattern_thread, &tdata[i]);
     }
@@ -277,28 +279,30 @@ int main(const int argc, char **argv) {
         int message_index = 0;
         const u32 total_pixels = (message_length + 2) / 3;
 
-        for (u32 i = 0; i < total_pixels; ++i) {
+        for (u32 i = 0; i < total_pixels && message_length > 0; ++i) {
             const u8 *pixel = pixel_ptr(pixel_data, bytes_per_pixel, width, current_width, current_height);
             if (!pixel) {
                 PRINT_ERROR("Pixel is out of bounds\n");
                 return 1;
             }
 
-            for (int j = 0; j < 3; ++j) {
+            // Extract up to 3 bytes
+            for (int j = 0; j < 3 && message_length > 0; ++j) {
                 message[message_index++] = pixel[j];
                 message_length -= 1;
-                if (message_length == 0) {
-                    write(STDOUT_FILENO, message, (size_t)message_index);
-                    write(STDOUT_FILENO, "\n", 1);
-                    return 0;
-                }
             }
+
             current_width += 1;
             // every 6 pixels, move up one row
             if ((i + 1) % 6 == 0) {
                 current_width = message_starting_pixel_width;
                 current_height -= 1;
             }
+        }
+
+        if (message_index > 0) {
+            write(STDOUT_FILENO, message, (size_t)message_index);
+            write(STDOUT_FILENO, "\n", 1);
         }
     } else {
         PRINT_ERROR("Pixel 7 positions to the right is out of bounds\n");
