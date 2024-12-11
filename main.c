@@ -55,14 +55,14 @@ struct file_content read_entire_file(char *filename) {
     return (struct file_content){file_data, file_size};
 }
 
-static u8* get_pixel(u8 *pixel_data, struct bmp_header *header, u32 x, u32 y) {
+static u8* get_pixel(u8 *pixel_data, const struct bmp_header *header, const u32 x, const u32 y) {
     if (x >= header->width || y >= header->height) {
         return NULL;
     }
     return pixel_data + (y * header->width + x) * (header->bit_per_pixel / 8);
 }
 
-static int check_pattern(u8 *pixel_data, struct bmp_header *header, u8 target_color[3], u32 x, u32 y) {
+static int check_pattern(u8 *pixel_data, const struct bmp_header *header, u8 target_color[3], const u32 x, const u32 y) {
     // Define the pattern offsets relative to (x, y)
     // For illustration, checking a vertical line above and a horizontal line at y-1
     int pattern_offsets[][2] = {
@@ -92,7 +92,7 @@ static int check_pattern(u8 *pixel_data, struct bmp_header *header, u8 target_co
     return 1;
 }
 
-void find_header(struct bmp_header *header, u8 target_color[3], u8 *pixel_data, int is_target_color_found, u32 *found_width, u32 *found_height) {
+void find_header(const struct bmp_header *header, u8 target_color[3], u8 *pixel_data, int is_target_color_found, u32 *found_width, u32 *found_height) {
     // Iterate through the pixel data
     for (u32 y = 0; y < header->height; ++y) {
         for (u32 x = 0; x < header->width; ++x) {
@@ -115,7 +115,7 @@ void find_header(struct bmp_header *header, u8 target_color[3], u8 *pixel_data, 
     }
 
     if (!is_target_color_found) {
-        printf("Target color not found\n");
+        PRINT_ERROR("Target color not found\n");
         exit(1);
     }
 }
@@ -131,11 +131,6 @@ int main(int argc, char **argv) {
         return 1;
     }
     struct bmp_header *header = (struct bmp_header *) file_content.data;
-    // printf(
-    //     "signature: %.2s\nfile_size: %u\ndata_offset: %u\ninfo_header_size: %u\nwidth: %u\nheight: %u\nplanes: %i\nbit_per_px: %i\ncompression_type: %u\ncompression_size: %u\n",
-    //     header->signature, header->file_size, header->data_offset, header->info_header_size, header->width,
-    //     header->height, header->number_of_planes, header->bit_per_pixel, header->compression_type,
-    //     header->compressed_image_size);
 
     // Define the target color (e.g., red)
     u8 target_color[3] = {127, 188, 217}; // RGB format
